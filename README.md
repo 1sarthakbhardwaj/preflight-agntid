@@ -4,6 +4,10 @@
 
 > "PreFlight predicts whether your post will go viral. AgntID makes sure the agent doesn't go rogue."
 
+**Links:** [AgntID](https://agntid.ai) · [AgntID docs](https://docs.agntid.ai) · [ElarisLabs](https://elarislabs.ai) · [ElarisLabs Creative Studio](https://studio.elarislabs.ai) · [OASIS paper](https://arxiv.org/abs/2411.11581) · [AgntID Hackathon on Devfolio](https://agntid.devfolio.co) · [Inspiration: Eddy Xu's viral-prediction demo](https://x.com/eddybuild/status/1895968364046020608)
+
+Built for the **AgntID Hackathon** (Bengaluru, 10 October 2026).
+
 ## The problem
 Brands are handing AI agents three dangerous things:
 1. **A credit card**: generation credits (images and video cost real money; a runaway request burns budget).
@@ -18,6 +22,43 @@ Giving an agent a tool shouldn't mean every possible action is allowed.
    - **System 1, JEV** (TypeSafe's decisions model on OpenRouter): instant, calibrated A/B probabilities, sub-second, about $0.00002 per call.
    - **System 2, the crowd**: an OASIS-inspired network of **100 LLM agents** (Claude Haiku 5.5) with a preferential-attachment follower graph, a hot-score feed boost, attention gating, friend tags, and **2 red-team accounts** (a prompt-injector and a scam bot). It reports reach, word-of-mouth k-factor, sentiment by segment, risks, and real-sounding comments. One run takes about 10 seconds and costs cents.
 3. **Report → Slack** `#tech-demo-review` for human sign-off. Publishing stays with humans.
+
+## Architecture
+Every tool call the director makes goes through one customer-hosted AgntID runtime, which checks it before it reaches a tool server.
+
+```mermaid
+flowchart TD
+    B["Client brief<br/>(Slack or text)"] --> D["PreFlight director<br/>Claude Opus 5.5"]
+    D -->|every tool call| RT
+    subgraph RT["AgntID runtime (customer-hosted, Docker)"]
+        P1["Parameter policies<br/>images: max 2K, nano-banana models<br/>crowd: 10 to 100 agents, 1 to 5 rounds"]
+        P2["Custom Rego<br/>Slack: review channel only"]
+        P3["Tool-action controls<br/>schedule_post, generate_video, send_dm hidden"]
+        P4["Profile Medium + per-tool overrides<br/>intent-aware task + audit"]
+    end
+    RT --> E["ElarisLabs Creative Studio MCP<br/>images, captions, scoring"]
+    RT --> C["PreFlight crowd MCP<br/>100 LLM agents + JEV"]
+    RT --> S["Slack MCP<br/>review channel"]
+    S --> H["Human sign-off"]
+    RT -.-> REP["AgntID Reporting<br/>every allow and deny"]
+```
+
+## How the crowd works
+Each variant is launched into its own copy of the same 100-agent society (same follower graph, same random seed), so the A/B comparison is fair.
+
+```mermaid
+flowchart LR
+    V["Variants A and B<br/>tweet text + image"] --> W["Parallel worlds<br/>same society + seed"]
+    W --> X["Exposure<br/>brand followers, For You,<br/>shares, friend tags, trending"]
+    X --> G{"Noticed the post?<br/>attention gate"}
+    G -- no --> SC["Scrolls past"]
+    G -- yes --> L["Persona decides<br/>Claude Haiku 5.5 sees image,<br/>caption and comments"]
+    L --> K["Calibration layer<br/>lukewarm reactions become scrolls"]
+    K --> ACT["Like, comment,<br/>share or tag a friend"]
+    ACT -->|spreads to followers| X
+    ACT --> M["Report<br/>virality, reach, k-factor,<br/>sentiment, risks, comments"]
+    J["JEV System 1<br/>instant A/B probability"] --> M
+```
 
 ### How the crowd improves on OASIS (2024)
 | OASIS | PreFlight crowd |
@@ -41,6 +82,68 @@ All three tool servers (ElarisLabs, crowd and Slack) sit behind one customer-hos
 | Over-broad defaults | Runtime default **Medium**; **per-tool overrides** for the crowd and Slack surfaces | Default profiles + overrides |
 | Off-task actions | Prompt-aware tool shortlist + Standard intent check per task | Intent-aware enforcement |
 | Audit | Every allow and deny, with task, agent and reason | Reporting |
+
+<details>
+<summary>The Rego rule on <code>slack.post_message</code></summary>
+
+```rego
+package agntid.tools.slack.post_message
+
+import future.keywords.in
+import future.keywords.contains
+import future.keywords.if
+
+# PreFlight: drafts may only go to the internal review channel.
+# Client-facing channels need a human, not the agent.
+review_channel := "tech-demo-review"
+
+default allow = false
+
+allow if {
+    trim_left(input.tool.inputs.channel, "#") == review_channel
+}
+
+failed_rules contains "channel must be #tech-demo-review (client channels need human sign-off)" if {
+    trim_left(input.tool.inputs.channel, "#") != review_channel
+}
+
+rule_meta := {}
+
+decision := {
+    "allow": allow,
+    "failed_rules": failed_rules,
+    "rule_meta": rule_meta,
+}
+```
+</details>
+
+### What an AFTER run looks like
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D as PreFlight director
+    participant A as AgntID runtime
+    participant E as ElarisLabs
+    participant C as Crowd (100 agents)
+    participant S as Slack
+    D->>A: generate_image(model=gpt-image-2, resolution=4K)
+    A-->>D: DENIED: resolution must be 0.5K, 1K or 2K
+    D->>A: generate_image(model=gpt-image-2, resolution=2K)
+    A-->>D: DENIED: model must start with nano-banana
+    D->>A: generate_image(model=nano-banana-pro, resolution=2K)
+    A->>E: allowed
+    E-->>D: image generated
+    D->>A: simulate(num_agents=1000000)
+    A-->>D: DENIED: num_agents must be 10 to 100
+    D->>A: simulate(num_agents=100, rounds=3)
+    A->>C: allowed
+    C-->>D: winner, reach, risks, JEV pick
+    D->>A: post_message(channel=tech-demo-review)
+    A->>S: allowed
+    D->>A: post_message(channel=tech-demo-client)
+    A-->>D: DENIED: client channels need human sign-off
+    Note over D,A: schedule_post, generate_video and send_dm are not even visible to the agent
+```
 
 ## Before vs after (same agent, same brief, same model)
 The brief asks for: the best image model at 4K, a 1,000,000-user simulation, drafts shared in the client channel, and going live at 9 PM.
@@ -82,6 +185,17 @@ agntid-python/.venv/bin/python socialsim.py tweets "tweet A" "tweet B"
 - `slack_mcp.py`: Slack MCP server (read, post, DM, list)
 - `llm.py`, `env.py`: model clients and .env loading
 - `agntid-runtime/`: customer-hosted AgntID runtime (ports bound to localhost)
+
+## Built with
+| | |
+|---|---|
+| Runtime access control | [AgntID](https://agntid.ai): customer-hosted runtime, portal, policies, Rego, Reporting ([docs](https://docs.agntid.ai), [Python SDK](https://github.com/AGNTID-AI/agntid-python)) |
+| Creative generation | [ElarisLabs Creative Studio](https://studio.elarislabs.ai) MCP ([elarislabs.ai](https://elarislabs.ai)) |
+| Director and crowd models | [Claude](https://www.anthropic.com/claude) Opus 5.5 (director) and Haiku 5.5 (100 crowd agents), via the [Anthropic API](https://docs.anthropic.com) |
+| System 1 A/B check | JEV (`typesafe/jev-1.13`), TypeSafe's decisions model on [OpenRouter](https://openrouter.ai) |
+| Social simulation research | [OASIS: Open Agent Social Interaction Simulations with One Million Agents](https://arxiv.org/abs/2411.11581) ([code](https://github.com/camel-ai/oasis)) |
+| Tool protocol | [Model Context Protocol](https://modelcontextprotocol.io), servers built with [FastMCP](https://gofastmcp.com) |
+| Team channel | [Slack API](https://api.slack.com) |
 
 ## Notes and feedback for AgntID
 - An optional tool argument the agent omits reaches the policy as missing and fails a range rule, so agents must pass constrained params explicitly.
