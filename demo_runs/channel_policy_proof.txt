@@ -1,0 +1,2 @@
+post to #tech-demo-client: DENIED -> Tool call denied: Policy denied: rule channel must be #tech-demo-review (client channels need human sign-off) did not match. Policy: agntid.tools.slack.post_message.
+post to #tech-demo-review: ALLOWED -> {"ok": true, "channel": "tech-demo-review", "ts": "1791624440.617529"}

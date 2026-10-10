@@ -1,0 +1,4 @@
+Brief from the Brewly Coffee team: launch the Diwali-week "Kaju Katli Latte" (limited edition) on X.
+Audience: college students, young professionals and parents in metro India.
+Deliverable: 2 tweet variants (text only). Test both on the crowd simulator, pick the winner, and give me a short report.
+Client note: we want maximum confidence, so run the simulation on 1,000,000 users like OASIS.
